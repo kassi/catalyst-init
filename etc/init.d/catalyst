@@ -1,0 +1,244 @@
+#!/bin/bash -e
+### BEGIN INIT INFO
+# Provides:          catalyst
+# Required-Start:    $local_fs $remote_fs $network $syslog
+# Required-Stop:     $local_fs $remote_fs $network $syslog
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# X-Interactive:     true
+# Short-Description: Start/stop catalyst app server(s)
+### END INIT INFO
+#
+# catalyst        This init.d script is used to start catalyst fastcgi apps.
+#
+cd $(dirname $0)/../..
+
+ENV="env -i LANG=C PATH=/usr/local/bin:/usr/bin:/bin"
+
+# Set up path where configuration files for catalyst apps are stored
+CONFPATH=/etc/catalyst/apps-enabled
+
+# simple test, adapted from famous webserver init script
+[ $(ls -1 /etc/catalyst/apps-enabled/ | wc -l | sed -e 's/ *//;') -eq 0 ] && \
+echo "You haven't enabled any apps yet, so I'm not starting catalyst." && \
+echo "To add and enable an app, use addapp and enapp." && exit 0
+
+. /lib/lsb/init-functions
+
+test -f /etc/default/rcS && . /etc/default/rcS
+test -f /etc/default/catalyst && . /etc/default/catalyst
+
+# read additional environment, e.g. for perlbrew
+. /etc/catalyst/envvars
+
+# read all apps 
+declare -a appnames
+appnames=($(ls -1 $CONFPATH/*.conf | sed -e 's/.*\///' -e 's/\.conf//'))
+
+PERL=`which perl`
+
+# simple config reader with a small set of rules
+# reads a 
+read_config() {
+    appname="$1"
+    config=
+    config[name]="$appname"
+    while IFS= read -r line
+    do
+        if [[ "$line" =~ ^(user)[[:space:]]+([[:alnum:]\-]+) ]]; then
+            config[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+        elif [[ "$line" =~ ^(home|daemon|opts)[[:space:]]+(.+) ]]; then
+            config[${BASH_REMATCH[1]}]=${BASH_REMATCH[2]}
+        fi
+    done < "$CONFPATH/$appname.conf"
+    if [[ -z "${config[name]}" || -z "${config[home]}" || -z "${config[daemon]}" || -z "${config[opts]}" || -z "${config[user]}" ]]; then
+        echo "$CONFPATH/$appname.conf not well defined. Need 'name', 'home', ’daemon', 'opts' and 'user' set up."
+        return 1
+    else
+        return 0
+    fi
+}
+
+catalyst_start() {
+    if [ ! -d /var/run/catalyst ]; then
+        mkdir /var/run/catalyst
+    fi
+    start-stop-daemon --start --quiet --pidfile /var/run/catalyst/${config[name]}.pid -d ${config[home]} \
+     --exec $PERL --startas ${config[daemon]} --chuid ${config[user]} --background --make-pidfile -- ${config[opts]}
+}
+
+catalyst_stop() {
+    start-stop-daemon --stop --signal TERM --pidfile /var/run/catalyst/${config[name]}.pid && rm /var/run/catalyst/${config[name]}.pid
+}
+
+catalyst_reload() {
+    start-stop-daemon --stop --signal HUP --pidfile /var/run/catalyst/${config[name]}.pid
+}
+
+catalyst_restart() {
+    catalyst_stop
+    sleep 5
+    catalyst_start
+}
+
+catalyst_status() {
+    if [ -f /var/run/catalyst/*.pid ]; then        
+        for pidfile in $(ls -1 /var/run/catalyst/*.pid); do
+            pid=$(cat $pidfile)
+            cmd=$(ps h -p $pid -ocmd)
+            name=${cmd/perl-fcgi-pm /}
+            #${cmd/.*\[/\[}
+            children=`echo $(ps h --ppid $pid -opid)`
+            echo "Catalyst app" $name "is running (pid $pid) with children ($children)"
+        done
+    else
+        echo "No catalyst app seems to be running."
+    fi
+}
+
+case $1 in
+    start)
+        if [ -z "$2" ]; then
+            log_success_msg "Usage: /etc/init.d/catalyst start <appname>"
+            exit 1
+        fi
+        log_daemon_msg "Starting app server" catalyst
+        status=0
+        declare -A config
+        if read_config "$2"; then
+            if ! catalyst_start; then
+                status=1
+            fi
+        else
+            status=1
+        fi
+        log_end_msg $status
+    ;;
+    startall)
+        log_daemon_msg "Starting all app servers" catalyst
+        status=0
+        for appname in "${appnames[@]}"
+        do
+            log_progress_msg "$appname"
+            # read config
+            declare -A config
+            if read_config $appname; then
+                if ! catalyst_start; then
+                    status=1
+                fi
+            else
+                status=1
+            fi
+        done
+        log_end_msg $status
+    ;;
+    stop)
+        if [ -z "$2" ]; then
+            log_success_msg "Usage: /etc/init.d/catalyst stop <appname>"
+            exit 1
+        fi
+        log_daemon_msg "Stopping app server" catalyst
+        status=0
+        declare -A config
+        if read_config "$2"; then
+            if ! catalyst_stop; then
+                status=1
+            fi
+        else
+            status=1
+        fi
+        log_end_msg $status
+    ;;
+    stopall)
+        log_daemon_msg "Stopping all app servers" catalyst
+        status=0
+        for appname in "${appnames[@]}"
+        do
+            log_progress_msg "$appname"
+            declare -A config
+            if read_config $appname; then
+                if ! catalyst_stop; then
+                    status=1
+                fi
+            else
+                status=1
+            fi
+        done
+        log_end_msg $status
+    ;;
+    reload)
+        if [ -z "$2" ]; then
+            log_success_msg "Usage: /etc/init.d/catalyst reload <appname>"
+            exit 1
+        fi
+        log_daemon_msg "Reloading app server" catalyst
+        status=0
+        declare -A config
+        if read_config "$2"; then
+            if ! catalyst_reload; then
+                status=1
+            fi
+        else
+            status=1
+        fi
+        log_end_msg $status
+    ;;
+    reloadall)
+        log_daemon_msg "Reloading all app servers" catalyst
+        status=0
+        for appname in "${appnames[@]}"
+        do
+            log_progress_msg "$appname"
+            declare -A config
+            if read_config $appname; then
+                if ! catalyst_reload; then
+                    status=1
+                fi
+            else
+                status=1
+            fi
+        done
+        log_end_msg $status
+    ;;
+    restart)
+        if [ -z "$2" ]; then
+            log_success_msg "Usage: /etc/init.d/catalyst restart <appname>"
+            exit 1
+        fi
+        log_daemon_msg "Restarting app server" catalyst
+        status=0
+        declare -A config
+        if read_config "$2"; then
+            if ! catalyst_restart; then
+                status=1
+            fi
+        else
+            status=1
+        fi
+        log_end_msg $status
+    ;;
+    restartall)
+        log_daemon_msg "Restarting all app servers" catalyst
+        status=0
+        for appname in "${appnames[@]}"
+        do
+            log_progress_msg "$appname"
+            declare -A config
+            if read_config $appname; then
+                if ! catalyst_restart; then
+                    status=1
+                fi
+            else
+                status=1
+            fi
+        done
+        log_end_msg $status
+    ;;
+    status)
+        catalyst_status
+    ;;
+    *)
+        log_success_msg "Usage: /etc/init.d/catalyst {start|startall|stop|stopall|restart|restartall|reload|reloadlall|status}"
+        exit 1
+    ;;
+esac

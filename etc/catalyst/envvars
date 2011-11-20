@@ -1,0 +1,8 @@
+## example exports for the perlbrew environment
+# export PERLBREW_PERL=perl-5.14.1
+# export PERLBREW_VERSION=0.29
+# export PERLBREW_PATH=/usr/local/share/perl5/bin:/usr/local/share/perl5/perls/perl-5.14.1/bin
+# export PERLBREW_ROOT=/usr/local/share/perl5
+# export PATH=$PERLBREW_PATH:$PATH
+# 
+# source /usr/local/share/perl5/etc/bashrc
